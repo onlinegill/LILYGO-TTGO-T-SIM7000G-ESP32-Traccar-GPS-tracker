@@ -14,13 +14,14 @@ String FINALLATI="0",FINALLOGI="0",FINALSPEED="0";
 #define GSM_PIN ""
 
 // Your GPRS credentials, if any
-const char apn[] = "YOUR_APN";
+const char apn[] = "Your-APN";
 const char gprsUser[] = "";
 const char gprsPass[] = "";
 
-const char server[] = "your Traccar ip or url";
-const int port = 5055; // your traccar port
-String myid = "Your Traccar id ";
+const char server[] = "Your Traccar Server IP";
+
+const int port = 5055;
+String myid = "Traccar ID";
 
 #include <TinyGsmClient.h>
 #include <ArduinoHttpClient.h>
@@ -99,10 +100,10 @@ DBG(" SGPIO=0,4,1,0 false ");
 modem.disableGPS();
 }
 
-void sendCoords(float lat, float lon)
+void send_data(float lat, float lon)
 {
 
-
+String FINALLATI="0",FINALLOGI="0",FINALSPEED="0";
 String SerialData="";
       SerialData = String(lat,6);
       String SerialData1="";
@@ -194,7 +195,7 @@ while (1)
 {
 if (modem.getGPS(&lat, &lon))
 {
-sendCoords(lat, lon);
+send_data(lat, lon);
 }
 digitalWrite(LED_PIN, !digitalRead(LED_PIN));
 delay(30000);
