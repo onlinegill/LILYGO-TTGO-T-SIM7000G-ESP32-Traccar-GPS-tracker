@@ -1,17 +1,3 @@
-you will need change following
-
-// Your GPRS credentials, if any
-//const char apn[] = "Your-APN";
-//const char gprsUser[] = "";
-//const char gprsPass[] = "";
-
-//const char server[] = "your Traccar Server IP";
-
-//const int port = 5055;
-//String myid = "your device id";
-
-//https://www.aliexpress.com/item/4000542688096.html
-
 #define SerialMon Serial
 
 // Set serial for AT commands (to the module)`
@@ -23,23 +9,22 @@ you will need change following
 
 // See all AT commands, if wanted
 // #define DUMP_AT_COMMANDS
-
+String FINALLATI="0",FINALLOGI="0",FINALSPEED="0";
 // set GSM PIN, if any
 #define GSM_PIN ""
 
 // Your GPRS credentials, if any
-const char apn[] = "Your-APN";
+const char apn[] = "YOUR_APN";
 const char gprsUser[] = "";
 const char gprsPass[] = "";
 
-const char server[] = "your Traccar Server IP";
-
-const int port = 5055;
-String myid = "your device id";
+const char server[] = "your Traccar ip or url";
+const int port = 5055; // your traccar port
+String myid = "Your Traccar id ";
 
 #include <TinyGsmClient.h>
 #include <ArduinoHttpClient.h>
-#include <ArduinoJson.h>
+
 
 #define DUMP_AT_COMMANDS
 
@@ -62,7 +47,6 @@ HttpClient http(client, server, port);
 #define PIN_TX 27
 #define PIN_RX 26
 #define PWR_PIN 4
-
 #define SD_MISO 2
 #define SD_MOSI 15
 #define SD_SCLK 14
@@ -118,7 +102,18 @@ modem.disableGPS();
 void sendCoords(float lat, float lon)
 {
 
-int err = http.post("/?id="+myid+"&lat="+lat+"&lon="+lon+"");
+
+String SerialData="";
+      SerialData = String(lat,6);
+      String SerialData1="";
+      SerialData1 = String(lon,6);
+      FINALLATI=SerialData;
+      FINALLOGI=SerialData1;
+
+
+
+
+int err = http.post("/?id="+myid+"&lat="+FINALLATI+"&lon="+FINALLOGI+"");
 if (err != 0)
 {
 SerialMon.println(F("failed to connect"));
@@ -140,7 +135,7 @@ SerialMon.println(body);
 
 // Shutdown
 http.stop();
-SerialMon.println(F("Server disconnected"));
+SerialMon.println(F("Server disconnected bye bye will connect soon"));
 }
 
 void setup()
@@ -182,7 +177,7 @@ SerialMon.print(apn);
 if (!modem.gprsConnect(apn, gprsUser, gprsPass))
 {
 SerialMon.println(" fail");
-delay(10000);
+delay(30000);
 return;
 }
 SerialMon.println(" success");
@@ -202,6 +197,6 @@ if (modem.getGPS(&lat, &lon))
 sendCoords(lat, lon);
 }
 digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-delay(7500);
+delay(30000);
 }
 }
