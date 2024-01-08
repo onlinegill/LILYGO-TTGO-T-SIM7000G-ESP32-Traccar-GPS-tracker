@@ -1,7 +1,6 @@
-This is LTE based gps tracker for traccar server
+LTE-based GPS tracker for Traccar server, modify essential libraries, including APN, Traccar server details, port (if not 5055), and your Traccar ID. Adjust the delay to suit your preferences. Ensure compatibility with the LILYGO-TTGO-T-SIM7000G-ESP32 by confirming your SIM card matches its specifications.
 
-You will need to change following 
-required libraries.
-Your APN, Traccar server and port if its not 5055 and your traccar id.
-you can change delay according to your needs.
-Make sure your sim card is compatible with LILYGO-TTGO-T-SIM7000G-ESP32
+
+
+
+
