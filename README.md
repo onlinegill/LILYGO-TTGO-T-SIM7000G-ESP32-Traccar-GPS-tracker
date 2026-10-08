@@ -1,24 +1,64 @@
-# LILYGO T-SIM7000G ESP32 / Traccar GPS tracker
+# LILYGO T-SIM7000G ESP32 GPS Tracker for Traccar
 
-Arduino firmware for reporting SIM7000G GNSS positions to a Traccar server using the OsmAnd-style HTTP position endpoint (typically port 5055).
+ESP32 + SIM7000G cellular GPS tracker firmware that sends GNSS positions to a [Traccar](https://www.traccar.org/) server through its OsmAnd-compatible HTTP endpoint.
 
-## Hardware
-LILYGO T-SIM7000G ESP32, active GNSS antenna, compatible SIM with data plan, and stable power. Verify the exact hardware revision and pinout against LILYGO documentation.
+> **Status:** The firmware has passed a PlatformIO ESP32 compilation check. Testing with a physical board, SIM card, GPS antenna, and live Traccar server is still required.
 
-## Configure
-Edit `traccar.ino` before uploading:
-- `apn`, `gprsUser`, `gprsPass`: SIM provider's packet-data settings.
-- `server` and `port`: accessible Traccar server and OsmAnd protocol port (default 5055).
-- `myid`: Traccar device identifier, matching the device configured in Traccar.
-- `GSM_PIN`: SIM PIN if needed; leave blank otherwise.
-- `REPORT_INTERVAL_MS`: interval between attempts (default 30 seconds).
+## Features
 
-**Privacy:** this firmware uses plain HTTP. It is **not** encrypted: network intermediaries can observe GPS coordinates and device identifiers. Use an appropriately protected server path/network before production deployment. Do not place personal credentials or private endpoints in public commits.
+- GPS coordinates, speed, altitude, satellite counts, and cellular signal data
+- Cellular connection checks with retry behavior
+- Rejection of invalid GPS coordinates
+- Configurable position reporting interval (default: 30 seconds)
+- Additional battery and device uptime telemetry
+- Automated firmware compilation using GitHub Actions
 
-## Build / verification
-The original Arduino IDE sketch is `traccar.ino`. Install ESP32 board support, TinyGSM, and ArduinoHttpClient and select an appropriate ESP32 board. For reproducible automated builds use PlatformIO:
+## Requirements
 
-```sh
+| Item | Requirement |
+| --- | --- |
+| Controller | LILYGO TTGO T-SIM7000G ESP32 |
+| Cellular | Activated SIM and compatible LTE-M / NB-IoT service |
+| GPS | GNSS antenna with outdoor reception for initial testing |
+| Server | Traccar server with an OsmAnd protocol listener, commonly TCP port `5055` |
+| Software | Arduino IDE with ESP32 support, or PlatformIO |
+
+**Check your particular LILYGO board revision and your mobile carrier's SIM7000G band support before use.** Not every SIM7000G module works on every carrier.
+
+## Quick start
+
+1. Install your SIM card and connect the cellular and GNSS antennas. Provide stable power.
+2. In Traccar, create a device and note its unique identifier.
+3. Open [`traccar.ino`](traccar.ino) and edit the settings shown below.
+4. Compile and upload the sketch for your ESP32 board.
+5. Open the serial monitor at **115200 baud**.
+6. Test outdoors, allow time for a GPS fix, and verify the location in Traccar.
+
+### Configuration
+
+At the top of [`traccar.ino`](traccar.ino), update:
+
+```cpp
+#define GSM_PIN ""                     // SIM PIN if your SIM requires one
+
+const char apn[] = "YOUR-APN";
+const char gprsUser[] = "";
+const char gprsPass[] = "";
+
+const char server[] = "YOUR_TRACCAR_HOST";
+const int port = 5055;
+String myid = "YOUR_TRACCAR_DEVICE_ID";
+
+const unsigned long REPORT_INTERVAL_MS = 30000UL;
+```
+
+Use the hostname or public IP address of your Traccar service, **without** an `http://` prefix. If using a private LAN address, the cellular modem cannot reach it unless the cellular network has a suitable route or VPN. Confirm your Traccar OsmAnd listener is accessible through the relevant firewall.
+
+### Build with PlatformIO
+
+The repository includes [`platformio.ini`](platformio.ini). The root Arduino sketch is converted to a PlatformIO source file for CI:
+
+```bash
 python3 -m pip install platformio==6.1.18
 mkdir -p src
 printf '#include <Arduino.h>\n' > src/main.cpp
@@ -26,24 +66,46 @@ cat traccar.ino >> src/main.cpp
 pio run -e sim7000g
 ```
 
-The CI workflow performs the same build for pull requests. **A passing build does not validate a physical modem**, SIM registration, network APN, GPS antenna, satellite lock, battery calibration, or successful reporting to your Traccar installation.
+To upload using PlatformIO, connect the board over USB, then run:
 
-## Behavior and limitations
-- Enables GNSS active-antenna power with the SIM7000G module GPIO command, then enables GNSS.
-- Checks cellular network and packet-data connections before attempting uploads.
-- Rejects invalid GNSS latitude/longitude and reports a valid location on the configured interval.
-- Attempts a fresh network connection on subsequent iterations when disconnected.
-- Battery percentage is a rough estimate, not a calibrated fuel gauge.
-- Vehicle ignition and charge detection **cannot be inferred accurately** from the battery pin. Their telemetry fields are sent as `unknown`. Don't use them for automation without adding a dedicated vehicle-voltage/ignition input.
-- HDOP and VDOP are placeholders set to zero rather than measured values.
-- Successful HTTP responses indicate acceptance by the web endpoint, but the Traccar device must also be configured correctly.
+```bash
+pio run -e sim7000g -t upload
+pio device monitor -b 115200
+```
 
-## Hardware acceptance checklist
-1. Confirm a clean build, upload, and serial startup (115200 baud).
-2. Verify modem network registration and APN connection.
-3. Outdoors with GNSS antenna attached, wait for a valid satellite fix.
-4. Confirm correct coordinates appear in the Traccar device, and examine HTTP responses.
-5. Disconnect/reconnect cellular service and confirm recovery.
-6. Check reported battery voltage against a meter before trusting percentage or battery-related alerts.
+You can also use the Arduino IDE with TinyGSM, ArduinoHttpClient, and ESP32 board support. Library compatibility may depend on the versions installed.
 
-Original README dated January 16, 2024. This branch updates documentation and connection reliability without claiming hardware validation.
+## Files
+
+| File | Purpose |
+| --- | --- |
+| [`traccar.ino`](traccar.ino) | Current tracker firmware |
+| [`old_backup.ino`](old_backup.ino) | Unmodified backup of the previous firmware |
+| [`platformio.ini`](platformio.ini) | PlatformIO dependency and board configuration |
+| [`.github/workflows/firmware.yml`](.github/workflows/firmware.yml) | Automatic compilation on pull requests and pushes |
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| No cellular network | SIM activation, carrier bands, antenna, coverage, and SIM PIN |
+| Packet-data connection fails | APN, data plan, and roaming permissions |
+| No GPS location | GNSS antenna connection, clear outdoor sky, and time for first fix |
+| HTTP request fails | Server hostname, port `5055`, firewall, and external reachability |
+| Traccar shows no position | Exact device ID, protocol port, HTTP response, and valid GPS fix |
+| Battery reading looks wrong | Board revision and voltage-divider / ADC calibration |
+
+## Known limitations and security
+
+- **HTTP is unencrypted.** Coordinates, device identifiers, and metadata may be visible to network intermediaries. Do not assume this is appropriate for sensitive deployments.
+- Battery percentage is only an estimate. Validate against a meter before using it for alerts.
+- Ignition and charging status are reported as `unknown`; they require a dedicated vehicle signal.
+- HDOP and VDOP are currently reported as zero placeholders rather than measured precision values.
+- The firmware uses fixed-period updates; it does not persist unsent points during connectivity loss.
+- This project is community firmware, not a certified emergency or anti-theft tracking system.
+
+## Testing and contributions
+
+GitHub Actions compiles the firmware on pull requests. **A successful build does not prove hardware compatibility or end-to-end tracking.** Please [open an issue](https://github.com/onlinegill/LILYGO-TTGO-T-SIM7000G-ESP32-Traccar-GPS-tracker/issues) with your board revision, carrier/country, observed serial output (remove personal data), and reproduction steps if something fails.
+
+The previous working sketch is kept in [`old_backup.ino`](old_backup.ino) for comparison and rollback.
