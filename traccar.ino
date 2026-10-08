@@ -22,12 +22,15 @@ const char gprsPass[] = "";
 const char server[] = "Your Traccar Server IP";
 const int port = 5055;
 String myid = "Traccar ID";
-const String FIRMWARE_VERSION = "v2.1.0-MaxTelemetry";
+const String FIRMWARE_VERSION = "v2.2.0-reliability";
+const unsigned long REPORT_INTERVAL_MS = 30000UL;
+const unsigned long NETWORK_RETRY_MS = 15000UL;
 
 #include <TinyGsmClient.h>
 #include <ArduinoHttpClient.h>
 
-#define DUMP_AT_COMMANDS
+// DEBUG MODE: uncomment to print modem AT exchanges (can disclose network metadata)
+// #define DUMP_AT_COMMANDS
 
 #ifdef DUMP_AT_COMMANDS
 #include <StreamDebugger.h>
@@ -75,9 +78,13 @@ void modemPowerOff() {
 
 void enableGPS(void) {
   Serial.println("Starting GPS module...");
-  modem.sendAT("+SGPIO=0,4,1,1");
-  modem.waitResponse(5000L);
-  modem.enableGPS();
+  modem.sendAT("+CGPIO=0,48,1,1");
+  if (modem.waitResponse(5000L) != 1) {
+    SerialMon.println("Warning: GPS antenna power command failed");
+  }
+  if (!modem.enableGPS()) {
+    SerialMon.println("Warning: GNSS activation failed");
+  }
 }
 
 void send_data(float lat, float lon, float speed, float alt, float accuracy, float currentBattery, 
@@ -90,15 +97,16 @@ void send_data(float lat, float lon, float speed, float alt, float accuracy, flo
   
   String FINALBAT = "";
   String FINALBATLEVEL = "";
-  String FINALIGNITION = "false";
-  String FINALCHARGE = "false";
+  // Battery voltage alone cannot reliably indicate vehicle ignition/charging.
+  String FINALIGNITION = "unknown";
+  String FINALCHARGE = "unknown";
 
   // Engine Status Logic via Battery Detection
   if (currentBattery <= 0.1) {
     FINALBATLEVEL = "";
     FINALBAT = "0.0";
-    FINALIGNITION = "true";
-    FINALCHARGE = "true";
+    FINALIGNITION = "unknown";
+    FINALCHARGE = "unknown";
   } else {
     float batterylevel = ((currentBattery - 3.0) / 1.2) * 100.0;
     if (batterylevel > 100.0) batterylevel = 100.0;
@@ -106,8 +114,8 @@ void send_data(float lat, float lon, float speed, float alt, float accuracy, flo
     
     FINALBAT = String(currentBattery, 2);
     FINALBATLEVEL = String(batterylevel, 0);
-    FINALIGNITION = "false";
-    FINALCHARGE = "false";
+    FINALIGNITION = "unknown";
+    FINALCHARGE = "unknown";
   }
 
   unsigned long uptimeSeconds = millis() / 1000;
@@ -132,8 +140,23 @@ void send_data(float lat, float lon, float speed, float alt, float accuracy, flo
                      "&uptime=" + String(uptimeSeconds) +
                      "&version=" + FIRMWARE_VERSION;
 
-  // URL Encode any spaces in operator name if necessary
-  urlParams.replace(" ", "%20");
+  // URL parameters must not contain unescaped delimiters from the carrier name.
+  // Preserve legitimate numeric values and encode the operator separately.
+  // The operator was appended above; replace its raw substring with its encoded form.
+  String encodedOperator;
+  const char hex[] = "0123456789ABCDEF";
+  for (size_t i = 0; i < operatorName.length(); ++i) {
+    const uint8_t c = static_cast<uint8_t>(operatorName[i]);
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
+      encodedOperator += static_cast<char>(c);
+    } else {
+      encodedOperator += '%';
+      encodedOperator += hex[(c >> 4) & 0x0F];
+      encodedOperator += hex[c & 0x0F];
+    }
+  }
+  urlParams.replace("&operator=" + operatorName + "&sat=", "&operator=" + encodedOperator + "&sat=");
 
   SerialMon.print("Payload Size: ");
   SerialMon.println(urlParams.length());
@@ -142,14 +165,14 @@ void send_data(float lat, float lon, float speed, float alt, float accuracy, flo
   int err = http.post(urlParams);
   if (err != 0) {
     SerialMon.println(F("Failed to connect to server"));
-    delay(5000);
+    http.stop();
     return;
   }
 
   int status = http.responseStatusCode();
-  if (status) {
-    String body = http.responseBody();
-    SerialMon.println("Server Response Code: " + String(status));
+  SerialMon.println("Server Response Code: " + String(status));
+  if (status < 200 || status >= 300) {
+    SerialMon.println("Warning: Traccar rejected telemetry or response timed out");
   }
   http.stop();
 }
@@ -171,59 +194,61 @@ void setup() {
     Serial.println("Modem restart timed out, proceeding...");
   }
 
-  if (GSM_PIN && modem.getSimStatus() != 3) {
+  if (GSM_PIN[0] != '\0' && modem.getSimStatus() != 3) {
     modem.simUnlock(GSM_PIN);
   }
 }
 
 void loop() {
-  SerialMon.print(F("Connecting to cellular network: "));
-  SerialMon.println(apn);
-  
-  if (!modem.gprsConnect(apn, gprsUser, gprsPass)) {
-    SerialMon.println("GPRS connection failed. Retrying...");
-    delay(15000);
-    return;
+  // Keep servicing GNSS even when cellular service is temporarily unavailable.
+  static bool gpsEnabled = false;
+  if (!gpsEnabled) {
+    enableGPS();
+    gpsEnabled = true;
   }
-  SerialMon.println("GPRS Connected Successfully!");
 
-  enableGPS();
-
-  float lat, lon, speed, alt, accuracy;
-  int vsat, usat, year, month, day, hour, min, sec;
-  float hdop = 0.0, vdop = 0.0, pdop = 0.0;
-  
-  while (1) {
-    battery = ReadBattery();
-    
-    // Fetch Cellular Metadata 
-    int rssi = modem.getSignalQuality(); // Returns standard dBm indicators
-    String operatorName = modem.getOperator(); // Pulls connected carrier string
-    if(operatorName.length() == 0) operatorName = "Unknown";
-
-    // Request GPS Fix
-    if (modem.getGPS(&lat, &lon, &speed, &alt, &vsat, &usat, &accuracy, &year, &month, &day, &hour, &min, &sec)) {
-      
-      // Attempt to pull granular dilution of precision metrics if modem supports it
-      modem.getGPS(&lat, &lon, &speed, &alt, &vsat, &usat, &accuracy, 
-                   &year, &month, &day, &hour, &min, &sec, &hdop, &vdop, &pdop);
-
-      // Ship out the master telemetry array
-      send_data(lat, lon, speed, alt, accuracy, battery, vsat, usat, rssi, operatorName, hdop, vdop);
+  if (!modem.isNetworkConnected()) {
+    SerialMon.println("Waiting for cellular network...");
+    if (!modem.waitForNetwork(60000L)) {
+      SerialMon.println("No cellular network; retrying");
+      delay(NETWORK_RETRY_MS);
+      return;
     }
-    
-    digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-    
-    // Manage loop pacing depending on vehicle deployment power state
-    if (battery <= 0.1) {
-      delay(10000); // Active updates when tracking with vehicle power
+  }
+
+  if (!modem.isGprsConnected()) {
+    SerialMon.println("Connecting packet data...");
+    if (!modem.gprsConnect(apn, gprsUser, gprsPass)) {
+      SerialMon.println("Packet data connection failed; retrying");
+      delay(NETWORK_RETRY_MS);
+      return;
+    }
+  }
+
+  float lat = 0, lon = 0, speed = 0, alt = 0, accuracy = 0;
+  int vsat = 0, usat = 0, year = 0, month = 0, day = 0;
+  int hour = 0, minute = 0, second = 0;
+  battery = ReadBattery();
+
+  if (modem.getGPS(&lat, &lon, &speed, &alt, &vsat, &usat,
+                   &accuracy, &year, &month, &day, &hour, &minute, &second)) {
+    if (isfinite(lat) && isfinite(lon) &&
+        lat >= -90.0f && lat <= 90.0f &&
+        lon >= -180.0f && lon <= 180.0f &&
+        !(lat == 0.0f && lon == 0.0f)) {
+      int rssi = modem.getSignalQuality(); // CSQ index 0-31, or 99 unknown; NOT dBm
+      String operatorName = modem.getOperator();
+      if (!operatorName.length()) operatorName = "Unknown";
+      // DOP is not available in this version of TinyGSM's portable GPS API.
+      send_data(lat, lon, speed, alt, accuracy, battery,
+                vsat, usat, rssi, operatorName, 0.0f, 0.0f);
     } else {
-      int count = 0;
-      while ((battery > 0.1) && (count < 60)) { // Conserve juice during fallback state
-        battery = ReadBattery();
-        delay(10000);
-        count++;
-      }
+      SerialMon.println("Invalid GPS coordinates ignored");
     }
+  } else {
+    SerialMon.println("Waiting for GPS fix");
   }
+
+  digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+  delay(REPORT_INTERVAL_MS);
 }
